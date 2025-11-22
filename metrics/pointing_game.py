@@ -5,7 +5,7 @@ Zhang et al., "Top-down Neural Attention by Excitation Backprop", ECCV 2016
 
 import torch
 import numpy as np
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Union
 
 
 class PointingGame:

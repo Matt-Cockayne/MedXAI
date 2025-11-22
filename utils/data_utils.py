@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets
 from PIL import Image
 import numpy as np
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple, Callable, Union
 
 
 def get_default_transforms(

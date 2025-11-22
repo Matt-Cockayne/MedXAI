@@ -179,7 +179,7 @@ def create_interface():
     """Create the Gradio interface."""
     app = ExplainabilityApp()
     
-    with gr.Blocks(title="Explainable AI Toolkit", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="Explainable AI Toolkit") as demo:
         gr.Markdown("""
         # 🔍 Explainable AI Toolkit
         ### Interactive Medical Imaging Explainability Comparison
