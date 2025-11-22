@@ -318,5 +318,24 @@ def create_interface():
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Launch Explainability Interface')
+    parser.add_argument('--share', action='store_true', 
+                        help='Create a public shareable link (for remote/headless environments)')
+    parser.add_argument('--port', type=int, default=7860,
+                        help='Port to run on (default: 7860)')
+    parser.add_argument('--server', type=str, default="0.0.0.0",
+                        help='Server address (default: 0.0.0.0)')
+    args = parser.parse_args()
+    
     demo = create_interface()
-    demo.launch(share=False, server_name="0.0.0.0", server_port=7860)
+    
+    # For headless/remote: use share=True to get a public URL
+    # For local: use share=False
+    demo.launch(
+        share=args.share,
+        server_name=args.server,
+        server_port=args.port,
+        show_error=True
+    )
