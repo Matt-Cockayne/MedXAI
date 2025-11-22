@@ -5,6 +5,11 @@ Example script demonstrating comparison of all explainability methods.
 import torch
 import matplotlib.pyplot as plt
 from torchvision import models
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import explainability toolkit
 from explainers import (

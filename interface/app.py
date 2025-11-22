@@ -8,10 +8,11 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional
-
-# Import explainability modules
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from explainers import (
     GradCAM, GradCAMPlusPlus, IntegratedGradients,
