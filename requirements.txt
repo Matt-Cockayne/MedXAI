@@ -1,0 +1,42 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+pillow>=9.5.0
+
+# Explainability and visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+opencv-python>=4.7.0
+scikit-image>=0.20.0
+
+# Metrics and evaluation
+scikit-learn>=1.2.0
+scipy>=1.10.0
+
+# Interactive interface
+gradio>=3.50.0
+streamlit>=1.28.0
+
+# Medical imaging datasets
+torchxrayvision>=1.2.0
+medmnist>=2.2.0
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0
+pandas>=2.0.0
+
+# Optional: For specific model architectures
+timm>=0.9.0  # PyTorch Image Models
+transformers>=4.30.0  # For ViT models
+
+# Development and testing
+pytest>=7.3.0
+pytest-cov>=4.1.0
+black>=23.3.0
+flake8>=6.0.0
+
+# Jupyter notebooks
+jupyter>=1.0.0
+ipywidgets>=8.0.0
