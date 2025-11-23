@@ -86,8 +86,8 @@ class DeletionInsertion:
         if input_tensor.dim() == 3:
             input_tensor = input_tensor.unsqueeze(0)
         
-        input_tensor = input_tensor.to(self.device)
-        saliency_map = saliency_map.to(self.device)
+        input_tensor = input_tensor.detach().to(self.device)
+        saliency_map = saliency_map.detach().to(self.device) if isinstance(saliency_map, torch.Tensor) else torch.tensor(saliency_map).to(self.device)
         
         # Get substrate
         substrate = self._get_substrate(input_tensor, self.substrate)
@@ -160,8 +160,8 @@ class DeletionInsertion:
         if input_tensor.dim() == 3:
             input_tensor = input_tensor.unsqueeze(0)
         
-        input_tensor = input_tensor.to(self.device)
-        saliency_map = saliency_map.to(self.device)
+        input_tensor = input_tensor.detach().to(self.device)
+        saliency_map = saliency_map.detach().to(self.device) if isinstance(saliency_map, torch.Tensor) else torch.tensor(saliency_map).to(self.device)
         
         # Get substrate
         substrate = self._get_substrate(input_tensor, self.substrate)

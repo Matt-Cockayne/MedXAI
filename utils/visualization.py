@@ -20,21 +20,25 @@ def apply_colormap(
     Apply colormap to heatmap.
     
     Args:
-        heatmap: Heatmap tensor (H, W)
+        heatmap: Heatmap tensor (H, W) or (1, H, W)
         colormap: Matplotlib colormap name
         normalize: Whether to normalize heatmap
         
     Returns:
         RGB image (H, W, 3) in range [0, 1]
     """
-    heatmap_np = heatmap.cpu().numpy() if isinstance(heatmap, torch.Tensor) else heatmap
+    heatmap_np = heatmap.detach().cpu().numpy() if isinstance(heatmap, torch.Tensor) else heatmap
+    
+    # Squeeze out batch dimension if present
+    if heatmap_np.ndim == 3 and heatmap_np.shape[0] == 1:
+        heatmap_np = heatmap_np.squeeze(0)
     
     if normalize:
         heatmap_np = (heatmap_np - heatmap_np.min()) / (heatmap_np.max() - heatmap_np.min() + 1e-8)
     
     # Apply colormap
     cmap = cm.get_cmap(colormap)
-    colored = cmap(heatmap_np)[:, :, :3]  # Remove alpha channel
+    colored = cmap(heatmap_np)[..., :3]  # Remove alpha channel, handle any shape
     
     return colored
 
@@ -50,16 +54,24 @@ def overlay_heatmap(
     
     Args:
         image: Input image (C, H, W) or (H, W, C), normalized to [0, 1]
-        heatmap: Heatmap (H, W)
+        heatmap: Heatmap (H, W) or (1, H, W)
         alpha: Blending factor for heatmap
         colormap: Colormap to use
         
     Returns:
         Overlaid image (H, W, 3)
     """
+    # Convert heatmap to numpy and squeeze any extra dimensions
+    if isinstance(heatmap, torch.Tensor):
+        heatmap = heatmap.cpu().numpy()
+    heatmap = np.squeeze(heatmap)  # Remove all singleton dimensions
+    
     # Convert image to numpy
     if isinstance(image, torch.Tensor):
         image_np = image.cpu().numpy()
+        # Squeeze batch dimension if present
+        if image_np.ndim == 4 and image_np.shape[0] == 1:
+            image_np = image_np.squeeze(0)
         if image_np.shape[0] in [1, 3]:  # (C, H, W)
             image_np = np.transpose(image_np, (1, 2, 0))
         if image_np.shape[2] == 1:  # Grayscale
@@ -67,8 +79,13 @@ def overlay_heatmap(
     else:
         image_np = image
     
-    # Normalize image to [0, 1]
-    if image_np.max() > 1.0:
+    # Denormalize if needed (check for ImageNet normalization)
+    if image_np.min() < 0 or (image_np.max() < 1.0 and image_np.max() - image_np.min() < 0.5):
+        mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+        std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+        image_np = image_np * std + mean
+        image_np = np.clip(image_np, 0, 1)
+    elif image_np.max() > 1.0:
         image_np = image_np / 255.0
     
     # Apply colormap to heatmap
@@ -151,21 +168,23 @@ def compare_methods(
 
 
 def visualize_comparison(
-    image: torch.Tensor,
+    image: Union[torch.Tensor, np.ndarray],
     explanations: Dict[str, torch.Tensor],
     metrics_results: Optional[Dict[str, Dict]] = None,
     save_path: Optional[str] = None,
-    colormap: str = 'jet'
+    colormap: str = 'jet',
+    original_image: Optional[Union['Image.Image', np.ndarray]] = None
 ) -> plt.Figure:
     """
     Comprehensive visualization with explanations and metrics.
     
     Args:
-        image: Original image
+        image: Original image (processed/upsampled)
         explanations: Dictionary of explanations
         metrics_results: Optional metrics for each method
         save_path: Path to save figure
         colormap: Colormap to use
+        original_image: Optional original low-resolution image to display
         
     Returns:
         Matplotlib figure
@@ -192,7 +211,14 @@ def visualize_comparison(
     else:
         img_np = image
     
-    if img_np.max() > 1.0:
+    # Denormalize if image appears to be normalized (negative values or small range)
+    if img_np.min() < 0 or (img_np.max() < 1.0 and img_np.max() - img_np.min() < 0.5):
+        # Apply ImageNet denormalization
+        mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+        std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+        img_np = img_np * std + mean
+        img_np = np.clip(img_np, 0, 1)
+    elif img_np.max() > 1.0:
         img_np = img_np / 255.0
     
     # Show original image
@@ -201,8 +227,25 @@ def visualize_comparison(
     else:
         ax_img = axes[0]
     
-    ax_img.imshow(img_np)
-    ax_img.set_title('Original Image', fontsize=12, fontweight='bold')
+    # Use original low-res image if provided, otherwise use processed image
+    if original_image is not None:
+        from PIL import Image
+        if isinstance(original_image, Image.Image):
+            display_img = np.array(original_image)
+        else:
+            display_img = original_image
+        # Convert grayscale to RGB if needed
+        if display_img.ndim == 2 or (display_img.ndim == 3 and display_img.shape[2] == 1):
+            if display_img.ndim == 3:
+                display_img = display_img.squeeze()
+            display_img = np.stack([display_img] * 3, axis=-1)
+        if display_img.max() > 1.0:
+            display_img = display_img / 255.0
+        ax_img.imshow(display_img, interpolation='nearest')
+        ax_img.set_title('Original Image (Low-Res)', fontsize=12, fontweight='bold')
+    else:
+        ax_img.imshow(img_np)
+        ax_img.set_title('Original Image', fontsize=12, fontweight='bold')
     ax_img.axis('off')
     
     # Show explanations

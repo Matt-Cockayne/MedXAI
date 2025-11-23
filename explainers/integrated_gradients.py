@@ -78,7 +78,8 @@ class IntegratedGradients(BaseExplainer):
             interpolated_inputs.append(interpolated)
         
         interpolated_inputs = torch.cat(interpolated_inputs, dim=0)
-        interpolated_inputs.requires_grad = True
+        # Clone and detach to create a new leaf variable
+        interpolated_inputs = interpolated_inputs.clone().detach().requires_grad_(True)
         
         # Forward pass on all interpolated inputs
         outputs = self.model(interpolated_inputs)

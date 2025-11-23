@@ -1,5 +1,10 @@
 """
-Interactive Gradio interface for comparing explainability methods.
+Interactive Gradio interface for MedMNIST explainability demonstrations.
+
+Three pre-configured pages for:
+1. DermaMNIST - Skin lesion classification
+2. PneumoniaMNIST - Pneumonia detection  
+3. ChestMNIST - Thoracic disease classification
 """
 
 import gradio as gr
@@ -7,312 +12,380 @@ import torch
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import sys
 from pathlib import Path
+import torchvision.transforms as transforms
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from explainers import (
-    GradCAM, GradCAMPlusPlus, IntegratedGradients,
-    RISE, Occlusion
+    GradCAM, GradCAMPlusPlus, IntegratedGradients, RISE
 )
-from metrics import (
-    PointingGame, DeletionInsertion,
-    FaithfulnessMetrics, PlausibilityMetrics
-)
+from metrics import DeletionInsertion, FaithfulnessMetrics
 from utils import (
-    load_model, get_target_layer_name, prepare_input,
-    overlay_heatmap, get_default_transforms
+    load_model, get_medical_dataset, visualize_comparison,
+    overlay_heatmap
 )
 
 
-class ExplainabilityApp:
-    """Interactive application for comparing explainability methods."""
+class MedMNISTExplainabilityApp:
+    """Interactive application for MedMNIST explainability demonstrations."""
     
     def __init__(self):
-        self.model = None
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.datasets = {}
+        self.models = {}
         self.explainers = {}
-        self.current_image = None
-        self.current_class = None
+        self.data_dir = Path('./data')
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
-    def load_model_fn(self, model_name: str):
-        """Load a pre-trained model."""
+    def load_dataset(self, dataset_name: str, num_classes: int, is_grayscale: bool = False):
+        """Load MedMNIST dataset and initialize model."""
         try:
-            self.model = load_model(model_name, pretrained=True, device=self.device)
-            target_layer = get_target_layer_name(self.model, model_name)
+            # Import medmnist
+            import medmnist
+            
+            # Custom transform for datasets
+            if is_grayscale:
+                transform = transforms.Compose([
+                    transforms.Resize(224),
+                    transforms.CenterCrop(224),
+                    transforms.Grayscale(num_output_channels=3),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225]
+                    )
+                ])
+            else:
+                transform = None  # Use default
+            
+            # Load dataset
+            dataset = get_medical_dataset(
+                dataset_name,
+                root=str(self.data_dir),
+                split='test',
+                transform=transform,
+                download=True
+            )
+            
+            self.datasets[dataset_name] = dataset
+            
+            # Load model
+            model = load_model('resnet50', num_classes=num_classes, device=self.device)
+            self.models[dataset_name] = model
             
             # Initialize explainers
-            self.explainers = {
-                'GradCAM': GradCAM(self.model, target_layer, self.device),
-                'GradCAM++': GradCAMPlusPlus(self.model, target_layer, self.device),
-                'Integrated Gradients': IntegratedGradients(self.model, self.device),
-                'RISE': RISE(self.model, self.device, n_masks=1000),
-                'Occlusion': Occlusion(self.model, self.device)
+            self.explainers[dataset_name] = {
+                'GradCAM': GradCAM(model, 'layer4', self.device),
+                'GradCAM++': GradCAMPlusPlus(model, 'layer4', self.device),
+                'Integrated Gradients': IntegratedGradients(model, self.device),
+                'RISE': RISE(model, self.device, n_masks=1000)
             }
             
-            return f"✅ Model {model_name} loaded successfully!"
+            return f"Loaded {dataset_name}: {len(dataset)} test images, {num_classes} classes"
         except Exception as e:
-            return f"❌ Error loading model: {str(e)}"
+            return f"Error loading {dataset_name}: {str(e)}"
     
-    def predict(self, image: Image.Image) -> tuple:
-        """Get model prediction for an image."""
-        if self.model is None:
-            return "Please load a model first", None
-        
-        # Preprocess image
-        input_tensor = prepare_input(image, device=self.device)
-        self.current_image = input_tensor
-        
-        # Get prediction
-        with torch.no_grad():
-            output = self.model(input_tensor)
-            probs = torch.nn.functional.softmax(output, dim=1)[0]
-            top5_probs, top5_indices = torch.topk(probs, 5)
-        
-        # Format results
-        results = []
-        for prob, idx in zip(top5_probs, top5_indices):
-            results.append(f"Class {idx}: {prob:.3f}")
-        
-        self.current_class = int(top5_indices[0])
-        
-        return "\n".join(results), int(top5_indices[0])
+    def load_sample(self, dataset_name: str, sample_idx: int, class_names: List[str]) -> Tuple:
+        """Load a sample from dataset."""
+        try:
+            if dataset_name not in self.datasets:
+                return None, "Dataset not loaded", None, None
+            
+            dataset = self.datasets[dataset_name]
+            model = self.models[dataset_name]
+            
+            # Get sample
+            image, label = dataset[sample_idx]
+            
+            # Handle multi-label (ChestMNIST)
+            if isinstance(label, np.ndarray) and len(label.shape) > 0 and len(label) > 1:
+                positive_labels = np.where(label == 1)[0]
+                if len(positive_labels) > 0:
+                    label = int(positive_labels[0])
+                else:
+                    label = 0
+            else:
+                # Convert numpy array to scalar properly
+                label = int(label.item()) if isinstance(label, np.ndarray) else int(label)
+            
+            # Get original low-res image
+            import medmnist
+            from medmnist import INFO
+            info = INFO[dataset_name]
+            DataClass = getattr(medmnist, info['python_class'])
+            original_dataset = DataClass(split='test', download=False, root=str(self.data_dir), transform=None)
+            original_image = original_dataset[sample_idx][0]
+            
+            # Get prediction
+            image_batch = image.unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                output = model(image_batch)
+                probs = torch.nn.functional.softmax(output, dim=1)[0]
+                pred_class = output.argmax(dim=1).item()
+                confidence = probs[pred_class].item()
+            
+            true_label = class_names[label] if label < len(class_names) else f"Class {label}"
+            pred_label = class_names[pred_class] if pred_class < len(class_names) else f"Class {pred_class}"
+            
+            info_text = f"Sample #{sample_idx}\nTrue: {true_label}\nPredicted: {pred_label} ({confidence:.2%})"
+            
+            return original_image, info_text, image_batch, label
+            
+        except Exception as e:
+            return None, f"Error: {str(e)}", None, None
     
     def generate_explanations(
         self,
-        image: Image.Image,
-        target_class: Optional[int],
-        methods: List[str],
-        progress=gr.Progress()
-    ) -> List[Image.Image]:
-        """Generate explanations using selected methods."""
-        if self.model is None:
-            return [None] * len(methods)
-        
-        if target_class is None:
-            target_class = self.current_class
-        
-        # Preprocess image
-        input_tensor = prepare_input(image, device=self.device)
-        
-        results = []
-        
-        for i, method_name in enumerate(progress.tqdm(methods, desc="Generating explanations")):
-            try:
-                explainer = self.explainers[method_name]
-                
-                # Generate explanation
-                if method_name == 'RISE':
-                    # RISE is slower, use fewer masks for demo
-                    heatmap = explainer.explain(input_tensor, target_class, n_masks=500)
-                else:
-                    heatmap = explainer.explain(input_tensor, target_class)
-                
-                # Overlay on original image
-                overlaid = overlay_heatmap(input_tensor, heatmap, alpha=0.5)
-                
-                # Convert to PIL Image
-                overlaid_uint8 = (overlaid * 255).astype(np.uint8)
-                results.append(Image.fromarray(overlaid_uint8))
-            except Exception as e:
-                print(f"Error with {method_name}: {e}")
-                results.append(None)
-        
-        return results
-    
-    def evaluate_explanations(
-        self,
-        image: Image.Image,
-        target_class: Optional[int],
-        methods: List[str],
-        ground_truth_mask: Optional[Image.Image] = None
-    ) -> str:
-        """Evaluate explanations with metrics."""
-        if self.model is None:
-            return "Please load a model first"
-        
-        if target_class is None:
-            target_class = self.current_class
-        
-        input_tensor = prepare_input(image, device=self.device)
-        
-        # Initialize metrics
-        di_metric = DeletionInsertion(self.model, self.device)
-        faith_metric = FaithfulnessMetrics(self.model, self.device)
-        
-        results_text = f"**Evaluation Results (Target Class: {target_class})**\n\n"
-        
-        for method_name in methods:
-            try:
-                explainer = self.explainers[method_name]
-                heatmap = explainer.explain(input_tensor, target_class)
-                
-                # Compute metrics
-                del_auc = di_metric.deletion_score(input_tensor, heatmap, target_class)
-                ins_auc = di_metric.insertion_score(input_tensor, heatmap, target_class)
-                
-                results_text += f"### {method_name}\n"
-                results_text += f"- Deletion AUC: {del_auc:.3f} (lower is better)\n"
-                results_text += f"- Insertion AUC: {ins_auc:.3f} (higher is better)\n"
-                
-                # Add plausibility metrics if ground truth provided
-                if ground_truth_mask is not None:
-                    gt_tensor = torch.from_numpy(
-                        np.array(ground_truth_mask.convert('L'))
-                    ).float() / 255.0
+        dataset_name: str,
+        image_batch: torch.Tensor,
+        label: int,
+        methods: List[str]
+    ) -> List[Tuple[Image.Image, str]]:
+        """Generate explanations and metrics."""
+        try:
+            if dataset_name not in self.explainers:
+                return [(None, "Dataset not loaded")] * 4
+            
+            model = self.models[dataset_name]
+            explainers = self.explainers[dataset_name]
+            
+            results = []
+            di_metric = DeletionInsertion(model, self.device, n_steps=30)
+            
+            for method_name in methods[:4]:  # Max 4 methods
+                try:
+                    explainer = explainers[method_name]
                     
-                    plaus_metric = PlausibilityMetrics()
-                    iou = plaus_metric.iou_score(heatmap, gt_tensor)
-                    results_text += f"- IoU with ground truth: {iou:.3f}\n"
-                
-                results_text += "\n"
-            except Exception as e:
-                results_text += f"### {method_name}\n❌ Error: {str(e)}\n\n"
+                    # Generate explanation
+                    if method_name == 'RISE':
+                        heatmap = explainer.explain(image_batch, label, n_masks=500)
+                    else:
+                        heatmap = explainer.explain(image_batch, label)
+                    
+                    # Ensure heatmap is detached and on CPU
+                    if isinstance(heatmap, torch.Tensor):
+                        heatmap = heatmap.detach().cpu()
+                    
+                    # Overlay on image (detach to avoid gradient issues)
+                    overlaid = overlay_heatmap(image_batch.detach(), heatmap, alpha=0.5)
+                    overlaid_uint8 = (overlaid * 255).astype(np.uint8)
+                    img = Image.fromarray(overlaid_uint8)
+                    
+                    # Compute metrics
+                    result = di_metric.evaluate(image_batch, heatmap, label)
+                    metrics_text = f"{method_name}\nDel: {result['deletion_auc']:.3f}\nIns: {result['insertion_auc']:.3f}"
+                    
+                    results.append((img, metrics_text))
+                except Exception as e:
+                    results.append((None, f"{method_name}\nError: {str(e)}"))
+            
+            # Pad to 4 results
+            while len(results) < 4:
+                results.append((None, ""))
+            
+            return results
+            
+        except Exception as e:
+            error_result = (None, f"Error: {str(e)}")
+            return [error_result] * 4
+    
+
+
+
+def create_dataset_tab(app, dataset_name: str, num_classes: int, class_names: List[str], 
+                       is_grayscale: bool = False, description: str = ""):
+    """Create a tab for a specific MedMNIST dataset."""
+    
+    # State variables
+    current_image_batch = gr.State(None)
+    current_label = gr.State(None)
+    
+    with gr.Column():
+        gr.Markdown(f"### {description}")
         
-        return results_text
+        # Load dataset button
+        with gr.Row():
+            load_btn = gr.Button(f"Load {dataset_name.upper()} Dataset", variant="primary", scale=2)
+            status_text = gr.Textbox(label="Status", scale=3, interactive=False)
+        
+        load_btn.click(
+            fn=lambda: app.load_dataset(dataset_name, num_classes, is_grayscale),
+            outputs=[status_text]
+        )
+        
+        # Sample selection
+        with gr.Row():
+            sample_slider = gr.Slider(
+                minimum=0, maximum=1000, step=1, value=42,
+                label="Select Sample Index"
+            )
+            load_sample_btn = gr.Button("Load Sample", variant="secondary")
+        
+        # Display sample and info
+        with gr.Row():
+            sample_image = gr.Image(label="Original Image (28x28)", type="pil", height=200)
+            sample_info = gr.Textbox(label="Sample Information", lines=4)
+        
+        # Explainability methods
+        gr.Markdown("### Generate Explanations")
+        method_checkboxes = gr.CheckboxGroup(
+            choices=['GradCAM', 'GradCAM++', 'Integrated Gradients', 'RISE'],
+            value=['GradCAM', 'GradCAM++', 'Integrated Gradients', 'RISE'],
+            label="Select Methods (max 4)"
+        )
+        
+        explain_btn = gr.Button("Generate Explanations & Metrics", variant="primary")
+        
+        # Results display
+        with gr.Row():
+            with gr.Column():
+                result1_img = gr.Image(label="Explanation 1", type="pil")
+                result1_text = gr.Textbox(label="Metrics", lines=3)
+            with gr.Column():
+                result2_img = gr.Image(label="Explanation 2", type="pil")
+                result2_text = gr.Textbox(label="Metrics", lines=3)
+        
+        with gr.Row():
+            with gr.Column():
+                result3_img = gr.Image(label="Explanation 3", type="pil")
+                result3_text = gr.Textbox(label="Metrics", lines=3)
+            with gr.Column():
+                result4_img = gr.Image(label="Explanation 4", type="pil")
+                result4_text = gr.Textbox(label="Metrics", lines=3)
+        
+        # Wire up callbacks
+        def load_sample_wrapper(idx):
+            img, info, batch, lbl = app.load_sample(dataset_name, int(idx), class_names)
+            return img, info, batch, lbl
+        
+        load_sample_btn.click(
+            fn=load_sample_wrapper,
+            inputs=[sample_slider],
+            outputs=[sample_image, sample_info, current_image_batch, current_label]
+        )
+        
+        def explain_wrapper(batch, label, methods):
+            if batch is None:
+                empty = (None, "Load a sample first")
+                return [empty] * 8
+            results = app.generate_explanations(dataset_name, batch, label, methods)
+            # Unpack tuples for outputs
+            outputs = []
+            for img, text in results:
+                outputs.extend([img, text])
+            return outputs
+        
+        explain_btn.click(
+            fn=explain_wrapper,
+            inputs=[current_image_batch, current_label, method_checkboxes],
+            outputs=[
+                result1_img, result1_text, result2_img, result2_text,
+                result3_img, result3_text, result4_img, result4_text
+            ]
+        )
 
 
 def create_interface():
-    """Create the Gradio interface."""
-    app = ExplainabilityApp()
+    """Create the Gradio interface with three MedMNIST dataset tabs."""
+    app = MedMNISTExplainabilityApp()
     
-    with gr.Blocks(title="Explainable AI Toolkit") as demo:
+    with gr.Blocks(title="MedMNIST Explainability Toolkit") as demo:
         gr.Markdown("""
-        # 🔍 Explainable AI Toolkit
-        ### Interactive Medical Imaging Explainability Comparison
+        # Explainable AI for Medical Imaging
+        ### Interactive MedMNIST Explainability Demonstrations
         
-        Compare different explainability methods for deep learning models in medical imaging.
+        Explore three medical imaging datasets with comprehensive explainability analysis.
+        Each tab demonstrates XAI methods on a different MedMNIST dataset.
         """)
         
-        with gr.Tab("Setup & Prediction"):
-            with gr.Row():
-                with gr.Column():
-                    model_dropdown = gr.Dropdown(
-                        choices=['resnet50', 'resnet18', 'densenet121', 'efficientnet_b0'],
-                        label="Select Model",
-                        value='resnet50'
-                    )
-                    load_btn = gr.Button("Load Model", variant="primary")
-                    model_status = gr.Textbox(label="Status", interactive=False)
-                
-                with gr.Column():
-                    input_image = gr.Image(type="pil", label="Upload Image")
-                    predict_btn = gr.Button("Get Prediction", variant="primary")
-                    prediction_output = gr.Textbox(label="Top 5 Predictions", lines=5)
-                    predicted_class = gr.Number(label="Predicted Class (for explanation)", precision=0)
-            
-            load_btn.click(
-                fn=app.load_model_fn,
-                inputs=[model_dropdown],
-                outputs=[model_status]
-            )
-            
-            predict_btn.click(
-                fn=app.predict,
-                inputs=[input_image],
-                outputs=[prediction_output, predicted_class]
+        with gr.Tab("DermaMNIST - Skin Lesions"):
+            create_dataset_tab(
+                app,
+                dataset_name='dermamnist',
+                num_classes=7,
+                class_names=[
+                    'Actinic Keratoses', 'Basal Cell Carcinoma', 'Benign Keratosis',
+                    'Dermatofibroma', 'Melanoma', 'Melanocytic Nevi', 'Vascular Lesions'
+                ],
+                is_grayscale=False,
+                description="**7-class skin lesion classification from dermatoscopic images**"
             )
         
-        with gr.Tab("Generate Explanations"):
-            gr.Markdown("### Select methods to compare")
-            
-            method_checkboxes = gr.CheckboxGroup(
-                choices=['GradCAM', 'GradCAM++', 'Integrated Gradients', 'RISE', 'Occlusion'],
-                value=['GradCAM', 'GradCAM++', 'Integrated Gradients'],
-                label="Explainability Methods"
-            )
-            
-            target_class_input = gr.Number(
-                label="Target Class (leave empty for predicted class)",
-                precision=0,
-                value=None
-            )
-            
-            generate_btn = gr.Button("Generate Explanations", variant="primary")
-            
-            with gr.Row():
-                output1 = gr.Image(label="Method 1")
-                output2 = gr.Image(label="Method 2")
-                output3 = gr.Image(label="Method 3")
-            
-            with gr.Row():
-                output4 = gr.Image(label="Method 4")
-                output5 = gr.Image(label="Method 5")
-            
-            generate_btn.click(
-                fn=app.generate_explanations,
-                inputs=[input_image, target_class_input, method_checkboxes],
-                outputs=[output1, output2, output3, output4, output5]
+        with gr.Tab("PneumoniaMNIST - Chest X-rays"):
+            create_dataset_tab(
+                app,
+                dataset_name='pneumoniamnist',
+                num_classes=2,
+                class_names=['Normal', 'Pneumonia'],
+                is_grayscale=True,
+                description="**Binary pneumonia detection from pediatric chest X-rays**"
             )
         
-        with gr.Tab("Quantitative Evaluation"):
-            gr.Markdown("### Evaluate explanation faithfulness")
-            
-            eval_methods = gr.CheckboxGroup(
-                choices=['GradCAM', 'GradCAM++', 'Integrated Gradients', 'RISE', 'Occlusion'],
-                value=['GradCAM', 'GradCAM++'],
-                label="Methods to Evaluate"
-            )
-            
-            ground_truth = gr.Image(
-                type="pil",
-                label="Ground Truth Mask (optional, for plausibility metrics)"
-            )
-            
-            eval_btn = gr.Button("Run Evaluation", variant="primary")
-            eval_results = gr.Markdown(label="Evaluation Results")
-            
-            eval_btn.click(
-                fn=app.evaluate_explanations,
-                inputs=[input_image, target_class_input, eval_methods, ground_truth],
-                outputs=[eval_results]
+        with gr.Tab("ChestMNIST - Thoracic Diseases"):
+            create_dataset_tab(
+                app,
+                dataset_name='chestmnist',
+                num_classes=14,
+                class_names=[
+                    'Atelectasis', 'Cardiomegaly', 'Effusion', 'Infiltration',
+                    'Mass', 'Nodule', 'Pneumonia', 'Pneumothorax',
+                    'Consolidation', 'Edema', 'Emphysema', 'Fibrosis',
+                    'Pleural Thickening', 'Hernia'
+                ],
+                is_grayscale=True,
+                description="**14-class thoracic disease classification from NIH ChestX-ray14**"
             )
         
         with gr.Tab("About"):
             gr.Markdown("""
             ## About This Tool
             
-            This interactive tool allows you to compare various explainability methods for deep learning models,
-            with a focus on medical imaging applications.
+            Interactive demonstration of explainability methods on MedMNIST datasets.
             
-            ### Implemented Methods
+            ### Datasets
             
-            #### Gradient-based
-            - **GradCAM**: Class Activation Mapping using gradients
-            - **GradCAM++**: Improved weighted class activation mapping
-            - **Integrated Gradients**: Path-based attribution method
+            - **DermaMNIST**: 7 skin lesion types from HAM10000 dataset
+            - **PneumoniaMNIST**: Binary pneumonia detection
+            - **ChestMNIST**: 14 thoracic diseases from NIH ChestX-ray14
             
-            #### Perturbation-based
+            ### Explainability Methods
+            
+            - **GradCAM**: Gradient-weighted Class Activation Mapping
+            - **GradCAM++**: Improved pixel-wise weighting
+            - **Integrated Gradients**: Path-based attribution
             - **RISE**: Randomized Input Sampling for Explanation
-            - **Occlusion**: Sliding window occlusion sensitivity analysis
             
-            ### Evaluation Metrics
+            ### Metrics
             
-            - **Deletion AUC**: Measures drop in confidence as important pixels are removed (lower is better)
-            - **Insertion AUC**: Measures rise in confidence as important pixels are added (higher is better)
-            - **IoU**: Intersection over Union with ground truth annotations
+            - **Deletion AUC**: Lower is better (explanation captures important features)
+            - **Insertion AUC**: Higher is better (explanation is sufficient)
             
             ### Usage
             
-            1. **Setup**: Load a pre-trained model
-            2. **Prediction**: Upload an image and get model predictions
-            3. **Explanation**: Select methods and generate visual explanations
-            4. **Evaluation**: Quantitatively evaluate explanation quality
+            1. Click "Load Dataset" to download and initialize
+            2. Select a sample using the slider
+            3. Click "Load Sample" to view the image
+            4. Choose explainability methods (up to 4)
+            5. Click "Generate Explanations & Metrics"
             
             ### Citation
             
-            If you use this toolkit, please cite:
-            ```
+            ```bibtex
             @software{explainable_ai_toolkit,
               author = {Matthew Cockayne},
-              title = {Explainable-AI: Comprehensive Medical Imaging Explainability Toolkit},
+              title = {Explainable-AI: Medical Imaging Explainability Toolkit},
               year = {2025},
               url = {https://github.com/Matt-Cockayne/Explainable-AI}
             }
             ```
+            
+            ### References
+            
+            MedMNIST: Yang et al., "MedMNIST v2: A Large-Scale Lightweight Benchmark for 2D and 3D Biomedical Image Classification", Scientific Data, 2023
             """)
     
     return demo

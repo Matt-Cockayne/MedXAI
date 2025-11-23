@@ -32,11 +32,11 @@ def main():
     print(f"Using device: {device}")
     
     # Load model
-    print("\n📦 Loading model...")
+    print("\nLoading model...")
     model_name = 'resnet50'
     model = load_model(model_name, pretrained=True, device=device)
     target_layer = get_target_layer_name(model, model_name)
-    print(f"✅ Model loaded: {model_name}")
+    print(f"Model loaded: {model_name}")
     print(f"Target layer for GradCAM: {target_layer}")
     
     # Load image (you'll need to provide an image path)
@@ -46,14 +46,14 @@ def main():
     try:
         image = load_image(image_path)
     except FileNotFoundError:
-        print("❌ Image not found. Please update the image_path variable.")
+        print("Image not found. Please update the image_path variable.")
         print("Using a random tensor for demonstration...")
         image = torch.randn(3, 224, 224)
     
     image = image.unsqueeze(0).to(device)
     
     # Get prediction
-    print("\n🔮 Getting model prediction...")
+    print("\nGetting model prediction...")
     with torch.no_grad():
         output = model(image)
         probs = torch.nn.functional.softmax(output, dim=1)
@@ -67,7 +67,7 @@ def main():
     print(f"\n🎯 Using target class: {target_class}")
     
     # Initialize explainers
-    print("\n⚙️  Initializing explainers...")
+    print("\nInitializing explainers...")
     explainers = {
         'GradCAM': GradCAM(model, target_layer, device),
         'GradCAM++': GradCAMPlusPlus(model, target_layer, device),
@@ -75,10 +75,10 @@ def main():
         'RISE': RISE(model, device, n_masks=2000),
         'Occlusion': Occlusion(model, device)
     }
-    print(f"✅ Initialized {len(explainers)} explainability methods")
+    print(f"Initialized {len(explainers)} explainability methods")
     
     # Generate explanations
-    print("\n🔍 Generating explanations...")
+    print("\nGenerating explanations...")
     explanations = {}
     
     for method_name, explainer in explainers.items():
@@ -86,22 +86,22 @@ def main():
         try:
             explanation = explainer.explain(image, target_class)
             explanations[method_name] = explanation
-            print("✅")
+            print("")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     # Visualize comparisons
-    print("\n📊 Creating visualizations...")
+    print("\nCreating visualizations...")
     fig = visualize_comparison(
         image,
         explanations,
         save_path='comparison.png'
     )
-    print("✅ Saved comparison to 'comparison.png'")
+    print("Saved comparison to 'comparison.png'")
     plt.close(fig)
     
     # Evaluate with metrics
-    print("\n📏 Computing evaluation metrics...")
+    print("\nComputing evaluation metrics...")
     
     # Deletion/Insertion curves
     di_metric = DeletionInsertion(model, device, n_steps=50)
@@ -112,9 +112,9 @@ def main():
         try:
             result = di_metric.evaluate(image, heatmap, target_class)
             di_results[method_name] = result
-            print(f"✅ Del: {result['deletion_auc']:.3f}, Ins: {result['insertion_auc']:.3f}")
+            print(f"Del: {result['deletion_auc']:.3f}, Ins: {result['insertion_auc']:.3f}")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     # Plot deletion/insertion curves
     if di_results:
@@ -122,11 +122,11 @@ def main():
             di_results,
             save_path='deletion_insertion_curves.png'
         )
-        print("✅ Saved curves to 'deletion_insertion_curves.png'")
+        print("Saved curves to 'deletion_insertion_curves.png'")
         plt.close(fig)
     
     # Faithfulness metrics
-    print("\n🔬 Computing faithfulness metrics...")
+    print("\nComputing faithfulness metrics...")
     faith_metric = FaithfulnessMetrics(model, device)
     
     for method_name, heatmap in list(explanations.items())[:3]:  # Evaluate first 3 methods
@@ -136,16 +136,16 @@ def main():
             for metric_name, value in metrics.items():
                 print(f"    - {metric_name}: {value:.3f}")
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f"    Error: {e}")
     
     print("\n" + "=" * 60)
-    print("✨ Demo completed successfully!")
+    print("Demo completed successfully!")
     print("\nGenerated files:")
     print("  - comparison.png")
     print("  - deletion_insertion_curves.png")
     
     # Summary
-    print("\n📈 Summary:")
+    print("\nSummary:")
     print("\nDeletion AUC (lower is better):")
     for method, result in sorted(di_results.items(), key=lambda x: x[1]['deletion_auc']):
         print(f"  {method}: {result['deletion_auc']:.3f}")
